@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 import numpy as np
 
 class DupireLocalVolatilityModel:
@@ -10,10 +9,25 @@ class DupireLocalVolatilityModel:
         self.price_grid = torch.tensor(price_grid, dtype=torch.float32)
 
     def interpolate_volatility(self, price, time):
-        # Bilinear interpolation for the local volatility surface
-        price_idx = torch.searchsorted(self.price_grid, price)
-        time_idx = torch.searchsorted(self.time_grid, time)
-        return self.volatility_surface[price_idx, time_idx]
+        price = torch.clamp(price, self.price_grid.min(), self.price_grid.max())
+        time = torch.clamp(time, self.time_grid.min(), self.time_grid.max())
+        price_idx = torch.searchsorted(self.price_grid, price) - 1
+        time_idx = torch.searchsorted(self.time_grid, time) - 1
+        price_idx = torch.clamp(price_idx, 0, self.volatility_surface.shape[0] - 2)
+        time_idx = torch.clamp(time_idx, 0, self.volatility_surface.shape[1] - 2)
+        
+        # Interpolation
+        vol_tl = self.volatility_surface[price_idx, time_idx]
+        vol_tr = self.volatility_surface[price_idx, time_idx + 1]
+        vol_bl = self.volatility_surface[price_idx + 1, time_idx]
+        vol_br = self.volatility_surface[price_idx + 1, time_idx + 1]
+
+        price_frac = (price - self.price_grid[price_idx]) / (self.price_grid[price_idx + 1] - self.price_grid[price_idx])
+        time_frac = (time - self.time_grid[time_idx]) / (self.time_grid[time_idx + 1] - self.time_grid[time_idx])
+
+        vol = vol_tl * (1 - price_frac) * (1 - time_frac) + vol_tr * time_frac * (1 - price_frac) + vol_bl * price_frac * (1 - time_frac) + vol_br * price_frac * time_frac
+
+        return vol
 
     def simulate_path(self, num_steps, dt, num_paths):
         paths = torch.zeros((num_paths, num_steps), dtype=torch.float32)
